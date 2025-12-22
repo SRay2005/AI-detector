@@ -2,6 +2,7 @@ import cv2
 import tempfile
 from utils.preprocessing import preprocess_image
 
+
 def extract_frames(file, fps=2):
     tmp = tempfile.NamedTemporaryFile(delete=False)
     tmp.write(file.file.read())

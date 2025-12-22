@@ -1,6 +1,7 @@
 from PIL import Image
 import io
 
+
 def metadata_score(file):
     try:
         image = Image.open(io.BytesIO(file.file.read()))
