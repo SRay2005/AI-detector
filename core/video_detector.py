@@ -7,6 +7,7 @@ def detect_video(file):
     frames = extract_frames(file, fps=2)
 
     frame_scores = [cnn_predict(f) for f in frames]
+    
     avg_score = sum(frame_scores) / len(frame_scores)
 
     temporal = temporal_score(frame_scores)

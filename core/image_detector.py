@@ -5,6 +5,7 @@ from core.fusion import fuse_scores
 from utils.metadata import metadata_score
 
 def detect_image(file):
+    
     image = preprocess_image(file)
 
     cnn_score = cnn_predict(image)
