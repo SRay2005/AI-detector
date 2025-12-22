@@ -10,6 +10,7 @@ model.classifier[1] = torch.nn.Linear(1280, 1)
 model.to(device)
 model.eval()
 
+
 def cnn_predict(image):
     transform = T.Compose([
         T.ToTensor(),

@@ -9,6 +9,6 @@ def fft_predict(image):
 
     high_freq_energy = magnitude[magnitude.shape[0]//4:, :].mean()
 
-    # Heuristic normalization
+    # Heuristic normalisation
     score = min(high_freq_energy / 10, 1.0)
     return round(score, 3)
