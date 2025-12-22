@@ -7,3 +7,4 @@ scipy
 pillow
 ffmpeg-python
 python-multipart
+numpy
