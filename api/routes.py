@@ -5,6 +5,7 @@ from core.video_detector import detect_video
 router = APIRouter()
 
 @router.post("/detect")
+
 async def detect(file: UploadFile):
     if file.content_type.startswith("image"):
         return detect_image(file)
