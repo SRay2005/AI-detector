@@ -3,7 +3,6 @@ uvicorn
 torch
 torchvision
 opencv-python
-numpy
 scipy
 pillow
 ffmpeg-python
