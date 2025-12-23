@@ -1,15 +1,11 @@
-from fastapi import APIRouter, UploadFile
-from core.image_detector import detect_image
-from core.video_detector import detect_video
+from fastapi import APIRouter, UploadFile, File
 
 router = APIRouter()
 
 @router.post("/detect")
-
-async def detect(file: UploadFile):
-    if file.content_type.startswith("image"):
-        return detect_image(file)
-    elif file.content_type.startswith("video"):
-        return detect_video(file)
-    else:
-        return {"error": "Unsupported media type"}
+async def detect(file: UploadFile = File(...)):
+    return {
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "message": "API is working"
+    }
