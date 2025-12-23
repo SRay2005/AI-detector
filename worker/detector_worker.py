@@ -3,8 +3,12 @@ import json
 import os
 
 
-# ---------------- METADATA SIGNAL ----------------
+# ================= METADATA SIGNAL =================
 def metadata_score(image_bytes: bytes) -> float:
+    """
+    Higher = weaker camera provenance.
+    Used ONLY as a mild dampener (never a veto).
+    """
     from PIL import Image
     import io
 
@@ -25,7 +29,8 @@ def metadata_score(image_bytes: bytes) -> float:
         if software:
             s = str(software).lower()
             if any(x in s for x in [
-                "diffusion", "midjourney", "dall", "ai", "generated"
+                "diffusion", "midjourney", "dall",
+                "ai", "generated", "automatic1111"
             ]):
                 score += 0.5
 
@@ -36,13 +41,12 @@ def metadata_score(image_bytes: bytes) -> float:
     return min(score, 1.0)
 
 
-# ---------------- JPEG QUANTIZATION SIGNAL ----------------
+# ================= JPEG QUANTIZATION =================
 def jpeg_quantization_score(image_bytes: bytes) -> float:
     """
-    Detects unnatural JPEG quantization tables.
-    AI images often have:
-    - flat / uniform tables
-    - non-camera-standard quantization
+    Estimates JPEG recompression strength.
+    IMPORTANT: This is NOT an AI signal.
+    It tells us whether FFT is reliable.
     """
     from PIL import Image
     import io
@@ -51,43 +55,39 @@ def jpeg_quantization_score(image_bytes: bytes) -> float:
     img = Image.open(io.BytesIO(image_bytes))
 
     if img.format != "JPEG":
-        return 0.0  # PNG/WebP skip
+        return 0.0
 
     qtables = img.quantization
     if not qtables:
         return 0.3
 
     score = 0.0
-
     for table in qtables.values():
         table = np.array(table)
 
-        # Very flat tables → suspicious
         if table.std() < 10:
             score += 0.4
 
-        # Many identical values → suspicious
         if len(set(table)) < 20:
             score += 0.3
 
     return min(score, 1.0)
 
 
-# ---------------- MAIN WORKER ----------------
+# ================= MAIN WORKER =================
 def main():
     input_path = os.path.abspath(sys.argv[1])
     output_path = os.path.abspath(sys.argv[2])
 
-    base = {
-        "type": "image",
-        "verdict": "Uncertain",
-        "confidence": 0.0,
-        "signals": {},
-        "status": "started"
-    }
-
+    # ---- crash-safe initial write ----
     with open(output_path, "w") as f:
-        json.dump(base, f)
+        json.dump({
+            "type": "image",
+            "verdict": "Uncertain",
+            "confidence": 0.0,
+            "signals": {},
+            "status": "started"
+        }, f)
         f.flush()
         os.fsync(f.fileno())
 
@@ -99,7 +99,7 @@ def main():
         with open(input_path, "rb") as f:
             image_bytes = f.read()
 
-        # ---------- FFT ----------
+        # ================= FFT =================
         gray = Image.open(io.BytesIO(image_bytes)).convert("L")
         img = np.array(gray)
 
@@ -111,25 +111,27 @@ def main():
         hf_energy = magnitude[h//4:3*h//4, w//4:3*w//4].mean()
         fft_score = min(hf_energy / 10.0, 1.0)
 
-        # ---------- METADATA ----------
+        # ================= OTHER SIGNALS =================
         meta_score = metadata_score(image_bytes)
-
-        # ---------- JPEG ----------
         jpeg_score = jpeg_quantization_score(image_bytes)
 
-        # ---------- FUSION (GATED, NOT AVERAGED) ----------
-        # Metadata reduces trust in FFT
-        fft_effective = fft_score * (1 - min(meta_score, 0.7))
+        # ================= RELIABILITY-GATED FUSION =================
+        # JPEG tells us whether FFT can be trusted
+        fft_reliability = 1.0 - min(jpeg_score, 0.7)
 
-        # JPEG boosts confidence only if FFT is already high
-        final_score = fft_effective
-        if fft_score > 0.6:
-            final_score += 0.4 * jpeg_score
+        # Metadata only mildly reduces confidence
+        meta_dampening = min(meta_score * 0.4, 0.25)
 
+        fft_effective = fft_score * fft_reliability * (1 - meta_dampening)
+
+        # Extreme synthetic texture override ONLY if FFT is reliable
+        fft_override = 0.15 if (fft_score >= 0.9 and jpeg_score < 0.3) else 0.0
+
+        final_score = fft_effective + fft_override
         final_score = min(final_score, 1.0)
 
-        # ---------- VERDICT ----------
-        if final_score >= 0.7:
+        # ================= VERDICT =================
+        if final_score >= 0.75:
             verdict = "Highly likely AI-generated"
         elif final_score >= 0.4:
             verdict = "Possibly AI-generated or edited"
@@ -143,13 +145,15 @@ def main():
             "signals": {
                 "fft": round(fft_score, 3),
                 "metadata": round(meta_score, 3),
-                "jpeg_quant": round(jpeg_score, 3)
+                "jpeg_quant": round(jpeg_score, 3),
+                "fft_reliability": round(fft_reliability, 3)
             },
             "status": "completed",
             "note": (
-                "Decision uses frequency artifacts, metadata provenance, "
-                "and JPEG quantization analysis. Verdict reflects likelihood, "
-                "not certainty."
+                "FFT detects synthetic texture artifacts. "
+                "JPEG recompression reduces FFT reliability. "
+                "Metadata mildly adjusts confidence. "
+                "Extreme FFT patterns override only when reliable."
             )
         }
 
@@ -163,6 +167,7 @@ def main():
             "error": str(e)
         }
 
+    # ---- guaranteed final write ----
     with open(output_path, "w") as f:
         json.dump(result, f)
         f.flush()
