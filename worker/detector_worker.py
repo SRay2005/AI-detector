@@ -9,6 +9,7 @@ if ROOT not in sys.path:
 
 from models.cnn_infer import cnn_score
 
+
 # ---------------- METADATA ----------------
 def metadata_score(image_bytes: bytes) -> float:
     from PIL import Image
@@ -16,8 +17,8 @@ def metadata_score(image_bytes: bytes) -> float:
 
     img = Image.open(io.BytesIO(image_bytes))
     exif = img.getexif()
-    score = 0.0
 
+    score = 0.0
     if not exif or len(exif) == 0:
         score += 0.4
     if exif.get(271) is None or exif.get(272) is None:
@@ -31,7 +32,7 @@ def metadata_score(image_bytes: bytes) -> float:
 
 
 # ---------------- JPEG ----------------
-def jpeg_quant_score(image_bytes: bytes) -> float:
+def jpeg_quantization_score(image_bytes: bytes) -> float:
     from PIL import Image
     import io
     import numpy as np
@@ -55,51 +56,54 @@ def main():
 
         image_bytes = open(inp, "rb").read()
 
-        # ---- FFT ----
+        # ---------------- FFT ----------------
         gray = Image.open(io.BytesIO(image_bytes)).convert("L")
-        img = np.array(gray)
-        f = np.fft.fftshift(np.fft.fft2(img))
+        arr = np.array(gray)
+        f = np.fft.fftshift(np.fft.fft2(arr))
         fft = np.log(np.abs(f) + 1)
         fft_score = min(fft.mean() / 10.0, 1.0)
 
-        # ---- Other signals ----
-        meta = metadata_score(image_bytes)
-        jpeg = jpeg_quant_score(image_bytes)
+        # ---------------- Signals ----------------
         cnn = cnn_score(image_bytes)
+        meta = metadata_score(image_bytes)
+        jpeg = jpeg_quantization_score(image_bytes)
 
+        # ---------------- Reliability ----------------
         fft_reliability = 1.0 - jpeg
         fft_effective = fft_score * fft_reliability * (1 - meta * 0.4)
 
-        # ---- Fusion (CNN dominates) ----
+        # ---------------- FINAL FUSION (FIXED) ----------------
         final = (
-            0.65 * cnn +
-            0.25 * fft_effective +
-            0.10 * (fft_score if fft_score > 0.9 else 0)
+            0.40 * fft_effective +
+            0.40 * cnn +
+            0.20 * meta
         )
 
-        final = min(final, 1.0)
+        final = round(min(final, 1.0), 3)
 
-        if final >= 0.75:
-            verdict = "Highly likely AI-generated"
-        elif final >= 0.4:
+        # ---------------- MARKERS (FIXED) ----------------
+        if final >= 0.65:
+            verdict = "Likely AI-generated"
+        elif final >= 0.45:
             verdict = "Possibly AI-generated"
         else:
-            verdict = "Uncertain / likely natural"
+            verdict = "Likely natural / uncertain"
 
         result = {
             "type": "image",
             "verdict": verdict,
-            "confidence": round(final, 3),
+            "confidence": final,
             "signals": {
                 "fft": round(fft_score, 3),
+                "cnn": round(cnn, 3),
                 "metadata": round(meta, 3),
-                "jpeg_quant": round(jpeg, 3),
-                "cnn": round(cnn, 3)
+                "jpeg_quant": round(jpeg, 3)
             },
             "status": "completed",
             "note": (
-                "Noise-residual CNN detects diffusion smoothness; FFT detects texture artifacts; "
-                "metadata and JPEG adjust reliability. Verdict reflects probability, not certainty."
+                "CNN feature variance provides a weak semantic cue; "
+                "FFT captures texture artifacts; metadata and JPEG "
+                "adjust reliability. Decision is probabilistic."
             )
         }
 

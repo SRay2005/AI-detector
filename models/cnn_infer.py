@@ -1,57 +1,65 @@
 import torch
-import torch.nn as nn
 import torchvision.transforms as T
+from torchvision.models import efficientnet_b0
 from PIL import Image
 import io
+import numpy as np
 
 # -----------------------------
-# Simple noise-residual CNN
+# Deterministic behaviour
 # -----------------------------
-class NoiseCNN(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(1, 8, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(8, 16, 3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d(1)
-        )
+torch.set_num_threads(1)
+torch.manual_seed(0)
 
-    def forward(self, x):
-        return self.net(x).view(x.size(0), -1)
-
-
-_model = NoiseCNN()
+# -----------------------------
+# Load ImageNet model
+# -----------------------------
+_model = efficientnet_b0(weights="IMAGENET1K_V1")
 _model.eval()
 
 _transform = T.Compose([
-    T.Resize((256, 256)),
-    T.Grayscale(),
-    T.ToTensor()
+    T.Resize((224, 224), interpolation=T.InterpolationMode.BICUBIC),
+    T.ToTensor(),
+    T.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
 ])
 
 
 def cnn_score(image_bytes: bytes) -> float:
     """
-    Returns AI likelihood based on noise residual consistency.
-    AI images are too smooth / uniform in noise space.
+    AI likelihood using normalized EfficientNet feature statistics.
+    Higher CV => more likely AI (based on observed data).
     """
 
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    img = img.resize((224, 224), Image.BICUBIC)
+
     x = _transform(img).unsqueeze(0)
 
     with torch.no_grad():
-        feat = _model(x)
+        features = _model.features(x)
 
-    var = feat.var().item()
+    mean = features.mean().item()
+    var = features.var().item()
 
-    # ---- calibrated thresholds ----
-    if var < 0.002:
-        return 0.95
-    elif var < 0.004:
-        return 0.7
-    elif var < 0.006:
-        return 0.4
-    else:
+    if mean <= 1e-6:
+        print("[CNN DEBUG] Mean too small, returning 0")
         return 0.0
+
+    cv = var / (mean * mean)
+
+    # 🔍 Verification line (keep for now)
+    print(f"[CNN DEBUG] mean={mean:.6f} | var={var:.6f} | cv={cv:.6f}")
+
+    # -----------------------------
+    # CORRECTED MAPPING (DATA-DRIVEN)
+    # -----------------------------
+    # Observed:
+    #   Real images: cv ≈ 25–30
+    #   AI images:   cv ≈ 35–45
+    score = (cv - 25.0) / 20.0
+    score = float(np.clip(score, 0.0, 0.85))  # safety cap
+
+    return round(score, 3)
