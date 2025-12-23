@@ -4,10 +4,9 @@ import io
 
 def metadata_score(file):
     try:
-        image = Image.open(io.BytesIO(file.file.read()))
+        file.file.seek(0)
+        image = Image.open(file.file)
         exif = image.getexif()
-        if not exif:
-            return 0.8  # suspicious
-        return 0.2
+        return 0.2 if exif else 0.8
     except:
         return 0.7
