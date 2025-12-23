@@ -1,14 +1,18 @@
 import numpy as np
-import cv2
+from PIL import Image
+import io
 
-def fft_predict(image):
-    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
-    f = np.fft.fft2(gray)
+def fft_score(image_bytes: bytes) -> float:
+    image = Image.open(io.BytesIO(image_bytes)).convert("L")
+    img = np.array(image)
+
+    # FFT
+    f = np.fft.fft2(img)
     fshift = np.fft.fftshift(f)
     magnitude = np.log(np.abs(fshift) + 1)
 
-    high_freq_energy = magnitude[magnitude.shape[0]//4:, :].mean()
+    h, w = magnitude.shape
+    high_freq_energy = magnitude[h//4:3*h//4, w//4:3*w//4].mean()
 
-    # Heuristic normalisation
-    score = min(high_freq_energy / 10, 1.0)
-    return round(score, 3)
+    score = min(high_freq_energy / 10.0, 1.0)
+    return float(score)
