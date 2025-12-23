@@ -5,11 +5,9 @@ router = APIRouter()
 
 @router.post("/detect")
 async def detect(file: UploadFile = File(...)):
-    content = await file.read()
+    data = await file.read()
 
     if file.content_type.startswith("image"):
-        return detect_image(content)
+        return detect_image(data)
 
-    return {
-        "error": "Only image files supported for now"
-    }
+    return {"error": "Unsupported file type"}
