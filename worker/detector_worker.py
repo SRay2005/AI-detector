@@ -72,8 +72,8 @@ def main():
 
         # ---- Fusion (CNN dominates) ----
         final = (
-            0.55 * cnn +
-            0.35 * fft_effective +
+            0.65 * cnn +
+            0.25 * fft_effective +
             0.10 * (fft_score if fft_score > 0.9 else 0)
         )
 
