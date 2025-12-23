@@ -1,13 +1,27 @@
 import sys
-import json
 import os
+import json
+
+# ==========================================================
+# FORCE PROJECT ROOT INTO PYTHON PATH (CRITICAL)
+# ==========================================================
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(THIS_DIR)
+
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+# Import AFTER path fix
+from models.cnn_infer import cnn_score
 
 
-# ================= METADATA SIGNAL =================
+# ==========================================================
+# METADATA SIGNAL
+# ==========================================================
 def metadata_score(image_bytes: bytes) -> float:
     """
     Higher = weaker camera provenance.
-    Used ONLY as a mild dampener (never a veto).
+    Used only as a mild dampener.
     """
     from PIL import Image
     import io
@@ -41,12 +55,13 @@ def metadata_score(image_bytes: bytes) -> float:
     return min(score, 1.0)
 
 
-# ================= JPEG QUANTIZATION =================
+# ==========================================================
+# JPEG QUANTIZATION (FFT RELIABILITY ESTIMATOR)
+# ==========================================================
 def jpeg_quantization_score(image_bytes: bytes) -> float:
     """
-    Estimates JPEG recompression strength.
-    IMPORTANT: This is NOT an AI signal.
-    It tells us whether FFT is reliable.
+    Measures recompression strength.
+    This reduces FFT reliability; it is NOT an AI signal.
     """
     from PIL import Image
     import io
@@ -74,7 +89,9 @@ def jpeg_quantization_score(image_bytes: bytes) -> float:
     return min(score, 1.0)
 
 
-# ================= MAIN WORKER =================
+# ==========================================================
+# MAIN WORKER
+# ==========================================================
 def main():
     input_path = os.path.abspath(sys.argv[1])
     output_path = os.path.abspath(sys.argv[2])
@@ -108,26 +125,32 @@ def main():
         magnitude = np.log(np.abs(fshift) + 1)
 
         h, w = magnitude.shape
-        hf_energy = magnitude[h//4:3*h//4, w//4:3*w//4].mean()
-        fft_score = min(hf_energy / 10.0, 1.0)
+        fft_score = min(
+            magnitude[h // 4: 3 * h // 4, w // 4: 3 * w // 4].mean() / 10.0,
+            1.0
+        )
 
         # ================= OTHER SIGNALS =================
-        meta_score = metadata_score(image_bytes)
-        jpeg_score = jpeg_quantization_score(image_bytes)
+        meta = metadata_score(image_bytes)
+        jpeg = jpeg_quantization_score(image_bytes)
+        cnn = cnn_score(image_bytes)
 
-        # ================= RELIABILITY-GATED FUSION =================
-        # JPEG tells us whether FFT can be trusted
-        fft_reliability = 1.0 - min(jpeg_score, 0.7)
+        # ================= RELIABILITY GATING =================
+        fft_reliability = 1.0 - min(jpeg, 0.7)
+        meta_damp = min(meta * 0.4, 0.25)
 
-        # Metadata only mildly reduces confidence
-        meta_dampening = min(meta_score * 0.4, 0.25)
+        fft_effective = fft_score * fft_reliability * (1 - meta_damp)
 
-        fft_effective = fft_score * fft_reliability * (1 - meta_dampening)
+        # Extreme FFT override ONLY if FFT is reliable
+        fft_override = 0.15 if (fft_score >= 0.9 and jpeg < 0.3) else 0.0
 
-        # Extreme synthetic texture override ONLY if FFT is reliable
-        fft_override = 0.15 if (fft_score >= 0.9 and jpeg_score < 0.3) else 0.0
+        # ================= FINAL FUSION =================
+        final_score = (
+            0.45 * fft_effective +
+            0.35 * cnn +
+            0.2 * fft_override
+        )
 
-        final_score = fft_effective + fft_override
         final_score = min(final_score, 1.0)
 
         # ================= VERDICT =================
@@ -144,16 +167,16 @@ def main():
             "confidence": round(final_score, 3),
             "signals": {
                 "fft": round(fft_score, 3),
-                "metadata": round(meta_score, 3),
-                "jpeg_quant": round(jpeg_score, 3),
-                "fft_reliability": round(fft_reliability, 3)
+                "metadata": round(meta, 3),
+                "jpeg_quant": round(jpeg, 3),
+                "fft_reliability": round(fft_reliability, 3),
+                "cnn": round(cnn, 3)
             },
             "status": "completed",
             "note": (
-                "FFT detects synthetic texture artifacts. "
-                "JPEG recompression reduces FFT reliability. "
-                "Metadata mildly adjusts confidence. "
-                "Extreme FFT patterns override only when reliable."
+                "FFT detects texture artifacts; JPEG estimates FFT reliability; "
+                "metadata provides weak provenance; CNN evaluates semantic realism. "
+                "No single signal dominates the decision."
             )
         }
 
@@ -162,7 +185,6 @@ def main():
             "type": "image",
             "verdict": "Uncertain",
             "confidence": 0.0,
-            "signals": {},
             "status": "failed",
             "error": str(e)
         }

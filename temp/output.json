@@ -1,1 +1,1 @@
-{"type": "image", "ai_generated": true, "confidence": 0.975, "signals": {"fft": 0.975}, "status": "completed"}
+{"type": "image", "verdict": "Uncertain / likely natural", "confidence": 0.324, "signals": {"fft": 0.975, "metadata": 0.4, "jpeg_quant": 1.0, "fft_reliability": 0.3, "cnn": 0.611}, "status": "completed", "note": "FFT detects texture artifacts; JPEG estimates FFT reliability; metadata provides weak provenance; CNN evaluates semantic realism. No single signal dominates the decision."}
