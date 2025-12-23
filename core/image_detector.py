@@ -24,7 +24,7 @@ def detect_image(file_bytes: bytes):
                 input_path,
                 output_path
             ],
-            timeout=15,
+            timeout=60,
             check=True
         )
 

@@ -1,8 +1,15 @@
+# ==============================
+# AI IMAGE DETECTOR – CHECKPOINT 1
+# Multi-iteration ensemble version
+# ==============================
+
 import sys
 import os
 import json
+import numpy as np
+from PIL import Image
+import io
 
-# ---------------- PATH FIX ----------------
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
@@ -10,100 +17,88 @@ if ROOT not in sys.path:
 from models.cnn_infer import cnn_score
 
 
-# ---------------- METADATA ----------------
 def metadata_score(image_bytes: bytes) -> float:
-    from PIL import Image
-    import io
-
     img = Image.open(io.BytesIO(image_bytes))
     exif = img.getexif()
 
     score = 0.0
     if not exif or len(exif) == 0:
         score += 0.4
-    if exif.get(271) is None or exif.get(272) is None:
-        score += 0.2
-
-    w, h = img.size
-    if w % 64 == 0 and h % 64 == 0:
+    if exif.get(271) is None:
         score += 0.2
 
     return min(score, 1.0)
 
 
-# ---------------- JPEG ----------------
-def jpeg_quantization_score(image_bytes: bytes) -> float:
-    from PIL import Image
-    import io
-    import numpy as np
+def fft_score_once(image_bytes: bytes) -> float:
+    gray = Image.open(io.BytesIO(image_bytes)).convert("L")
+    arr = np.array(gray)
 
-    img = Image.open(io.BytesIO(image_bytes))
-    if img.format != "JPEG" or not img.quantization:
-        return 0.0
+    # Minor numerical jitter via float conversion
+    arr = arr.astype(np.float32) + np.random.normal(0, 0.5, arr.shape)
 
-    q = np.array(list(img.quantization.values())[0])
-    return 0.3 if q.std() < 10 else 0.0
+    f = np.fft.fftshift(np.fft.fft2(arr))
+    fft = np.log(np.abs(f) + 1)
+    return min(fft.mean() / 10.0, 1.0)
 
 
-# ---------------- MAIN ----------------
+def fft_score(image_bytes: bytes, runs: int = 20) -> dict:
+    scores = [fft_score_once(image_bytes) for _ in range(runs)]
+    return {
+        "mean": round(float(np.mean(scores)), 3),
+        "std": round(float(np.std(scores)), 3)
+    }
+
+
 def main():
     inp, out = sys.argv[1], sys.argv[2]
 
     try:
-        import numpy as np
-        from PIL import Image
-        import io
-
         image_bytes = open(inp, "rb").read()
 
-        # ---------------- FFT ----------------
-        gray = Image.open(io.BytesIO(image_bytes)).convert("L")
-        arr = np.array(gray)
-        f = np.fft.fftshift(np.fft.fft2(arr))
-        fft = np.log(np.abs(f) + 1)
-        fft_score = min(fft.mean() / 10.0, 1.0)
-
-        # ---------------- Signals ----------------
-        cnn = cnn_score(image_bytes)
+        cnn = cnn_score(image_bytes, runs=20)
+        fft = fft_score(image_bytes, runs=20)
         meta = metadata_score(image_bytes)
-        jpeg = jpeg_quantization_score(image_bytes)
 
-        # ---------------- Reliability ----------------
-        fft_reliability = 1.0 - jpeg
-        fft_effective = fft_score * fft_reliability * (1 - meta * 0.4)
-
-        # ---------------- FINAL FUSION (FIXED) ----------------
+        # CP1 fusion on MEANS
         final = (
-            0.40 * fft_effective +
-            0.40 * cnn +
+            0.45 * fft["mean"] +
+            0.35 * cnn["mean"] +
             0.20 * meta
         )
 
-        final = round(min(final, 1.0), 3)
+        # Stability penalty (important)
+        instability = cnn["std"] + fft["std"]
+        final = final - 0.5 * instability
 
-        # ---------------- MARKERS (FIXED) ----------------
-        if final >= 0.65:
-            verdict = "Likely AI-generated"
-        elif final >= 0.45:
+        final = round(float(np.clip(final, 0.0, 1.0)), 3)
+
+        if final >= 0.8:
+            verdict = "AI-generated"
+        elif final >= 0.6:
             verdict = "Possibly AI-generated"
+        elif final >= 0.4:
+            verdict = "Uncertain"
         else:
-            verdict = "Likely natural / uncertain"
+            verdict = "Likely natural"
 
         result = {
             "type": "image",
             "verdict": verdict,
             "confidence": final,
             "signals": {
-                "fft": round(fft_score, 3),
-                "cnn": round(cnn, 3),
-                "metadata": round(meta, 3),
-                "jpeg_quant": round(jpeg, 3)
+                "cnn_mean": cnn["mean"],
+                "cnn_std": cnn["std"],
+                "fft_mean": fft["mean"],
+                "fft_std": fft["std"],
+                "metadata": meta,
+                "instability": round(instability, 3)
             },
             "status": "completed",
             "note": (
-                "CNN feature variance provides a weak semantic cue; "
-                "FFT captures texture artifacts; metadata and JPEG "
-                "adjust reliability. Decision is probabilistic."
+                "CHECKPOINT 1 ensemble detector. "
+                "Final decision based on mean signal across multiple stochastic passes. "
+                "Instability across runs reduces confidence."
             )
         }
 
@@ -115,7 +110,7 @@ def main():
         }
 
     with open(out, "w") as f:
-        json.dump(result, f)
+        json.dump(result, f, indent=2)
 
 
 if __name__ == "__main__":
