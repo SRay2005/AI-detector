@@ -1,52 +1,57 @@
 import torch
+import torch.nn as nn
 import torchvision.transforms as T
-from torchvision.models import efficientnet_b0
 from PIL import Image
 import io
 
-# --------------------------------------------------
-# Load model once (module-level singleton)
-# --------------------------------------------------
-_model = None
+# -----------------------------
+# Simple noise-residual CNN
+# -----------------------------
+class NoiseCNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 8, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(8, 16, 3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1)
+        )
+
+    def forward(self, x):
+        return self.net(x).view(x.size(0), -1)
 
 
-def _load_model():
-    global _model
-    if _model is None:
-        model = efficientnet_b0(weights="IMAGENET1K_V1")
-        model.eval()
-        _model = model
-    return _model
+_model = NoiseCNN()
+_model.eval()
+
+_transform = T.Compose([
+    T.Resize((256, 256)),
+    T.Grayscale(),
+    T.ToTensor()
+])
 
 
 def cnn_score(image_bytes: bytes) -> float:
     """
-    Returns a heuristic AI-likelihood score based on CNN confidence.
-    This is a SUPPORTING signal, not ground truth.
+    Returns AI likelihood based on noise residual consistency.
+    AI images are too smooth / uniform in noise space.
     """
 
-    model = _load_model()
-
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
-    transform = T.Compose([
-        T.Resize((224, 224)),
-        T.ToTensor(),
-        T.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        )
-    ])
-
-    x = transform(img).unsqueeze(0)
+    x = _transform(img).unsqueeze(0)
 
     with torch.no_grad():
-        logits = model(x)
-        probs = torch.softmax(logits, dim=1)
+        feat = _model(x)
 
-    # Use overconfidence as proxy
-    max_prob = probs.max().item()
+    var = feat.var().item()
 
-    # Map confidence into [0,1] AI-likelihood
-    ai_score = max(0.0, max_prob - 0.6) / 0.4
-    return min(ai_score, 1.0)
+    # ---- calibrated thresholds ----
+    if var < 0.002:
+        return 0.95
+    elif var < 0.004:
+        return 0.7
+    elif var < 0.006:
+        return 0.4
+    else:
+        return 0.0
